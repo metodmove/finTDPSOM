@@ -47,7 +47,7 @@ class TDPSOM:
 
     def __init__(self, input_size, latent_dim=10, som_dim=[8, 8], learning_rate=1e-4, decay_factor=0.99,
                  decay_steps=2000, input_channels=98, alpha=10., beta=100., gamma=100., kappa=0.,
-                 theta=1., eta=1., dropout=0.5, prior=0.001, lstm_dim=100):
+                 theta=1., eta=1., dropout=0.5, prior=0.001, lstm_dim=100, vae_nn_dim_1=500, vae_nn_dim_2=2000):
 
         """Initialization method for the T-DPSOM model object.
         Args:
@@ -67,6 +67,8 @@ class TDPSOM:
             eta (float): Weight for the prediction loss (default: 1).
             dropout (float): Dropout factor for the feed-forward layers of the VAE (default: 0.5).
             prior (float): Weight of the regularization term of the ELBO (default: 0.5).
+            vae_nn_dim_1 (int): dimension of fully connected layers in VAE NNs
+            vae_nn_dim_2 (int): dimension of fully connected layers in VAE NNs
         """
 
         self.input_size = input_size
@@ -85,6 +87,8 @@ class TDPSOM:
         self.dropout = dropout
         self.prior = prior
         self.lstm_dim = lstm_dim
+        self.vae_nn_dim_1 = vae_nn_dim_1
+        self.vae_nn_dim_2 = vae_nn_dim_2
         self.prior
         self.is_training
         self.inputs
@@ -158,13 +162,13 @@ class TDPSOM:
     def z_e(self):
         """Computes the distribution of probability of the latent embeddings."""
         with tf.variable_scope("encoder"):
-            h_1 = tf.keras.layers.Dense(500, activation=tf.nn.leaky_relu)(self.x)
+            h_1 = tf.keras.layers.Dense(self.vae_nn_dim_1, activation=tf.nn.leaky_relu)(self.x)
             h_1 = tf.keras.layers.Dropout(rate=self.dropout)(h_1)
             h_1 = tf.keras.layers.BatchNormalization()(h_1)
-            h_1 = tf.keras.layers.Dense(500, activation=tf.nn.leaky_relu)(h_1)
+            h_1 = tf.keras.layers.Dense(self.vae_nn_dim_1, activation=tf.nn.leaky_relu)(h_1)
             h_1 = tf.keras.layers.Dropout(rate=self.dropout)(h_1)
             h_1 = tf.keras.layers.BatchNormalization()(h_1)
-            h_2 = tf.keras.layers.Dense(2000, activation=tf.nn.leaky_relu)(h_1)
+            h_2 = tf.keras.layers.Dense(self.vae_nn_dim_2, activation=tf.nn.leaky_relu)(h_1)
             h_2 = tf.keras.layers.Dropout(rate=self.dropout)(h_2)
             h_2 = tf.keras.layers.BatchNormalization()(h_2)
             z_e_mu = tf.keras.layers.Dense(self.latent_dim, activation=None)(h_2)
@@ -284,11 +288,11 @@ class TDPSOM:
             z_p = tf.placeholder(tf.float32, shape=[None, self.latent_dim], name="z_e")
             z_e = tf.cond(self.is_training, lambda: self.z_e_sample, lambda: z_p)
 
-            h_1 = tf.keras.layers.Dense(2000, activation=tf.nn.leaky_relu)(z_e)
+            h_1 = tf.keras.layers.Dense(self.vae_nn_dim_2, activation=tf.nn.leaky_relu)(z_e)
             h_1 = tf.keras.layers.BatchNormalization()(h_1)
-            h_2 = tf.keras.layers.Dense(500, activation=tf.nn.leaky_relu)(h_1)
+            h_2 = tf.keras.layers.Dense(self.vae_nn_dim_1, activation=tf.nn.leaky_relu)(h_1)
             h_2 = tf.keras.layers.BatchNormalization()(h_2)
-            h_3 = tf.keras.layers.Dense(500, activation=tf.nn.leaky_relu)(h_2)
+            h_3 = tf.keras.layers.Dense(self.vae_nn_dim_1, activation=tf.nn.leaky_relu)(h_2)
             h_3 = tf.keras.layers.BatchNormalization()(h_3)
 
             #x_hat = tf.keras.layers.Dense(self.input_channels)(h_3)
@@ -299,6 +303,14 @@ class TDPSOM:
             #                            activation=None)(h_3)
             #x_hat = tfp.layers.MultivariateNormalTriL(self.input_channels)(x_hat)
         x_hat_sampled = tf.identity(x_hat, name="x_hat")
+        return x_hat
+
+    @lazy_scope
+    def reconstruction_e_sample(self):
+        """Sample from the distribution of probability of the reconstruction (likelihood distribution)."""
+        x_hat = self.reconstruction_e.sample()
+        x_hat = tf.identity(x_hat, name="z_e")
+        # tf.summary.histogram("count_nonzeros_z_e", tf.count_nonzero(x_hat, -1))
         return x_hat
 
     @lazy_scope
@@ -461,3 +473,4 @@ class TDPSOM:
         train_step_ae = optimizer.minimize(self.loss_reconstruction_ze, global_step=self.global_step)
         train_step_som = optimizer.minimize(self.loss_a, global_step=self.global_step)
         return train_step, train_step_ae, train_step_som, train_step_prob
+

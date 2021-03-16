@@ -21,7 +21,7 @@ import math
 import h5py
 from sklearn import metrics
 from TempDPSOM_model import TDPSOM
-from utils import compute_finance_labels
+from utils import compute_finance_labels, print_trainable_vars, get_gradients, find_nearest
 from sklearn.model_selection import train_test_split
 import sklearn
 
@@ -94,6 +94,9 @@ def ex_config():
     benchmark=False # Benchmark train time per epoch and return
     train_ratio=1.0 # If changed, use a subset of the training data
 
+    vae_nn_dim_1 = 50
+    vae_nn_dim_2 = 200
+
     # finance TDPSOM params below
     finance_data_path = "../data/yf_basic_price_features.p"
     N_companies_train = 400
@@ -140,6 +143,7 @@ def get_data_finance(finance_data_path, N_companies_train, T_finance_data):
     train_data, train_labels = [], []
     for comp in train_companies:
         data_comp, nr_labels = compute_finance_labels(data[comp])
+        assert not data_comp.isnull().values.any(), "Sanity check for input data."
         train_data.append(data_comp.iloc[-T_finance_data:, :-nr_labels].values)
         train_labels.append(data_comp.iloc[-T_finance_data:, -nr_labels:].values)
     train_data = np.stack(train_data)
@@ -148,6 +152,7 @@ def get_data_finance(finance_data_path, N_companies_train, T_finance_data):
     eval_data, eval_labels = [], []
     for comp in eval_companies:
         data_comp, nr_labels = compute_finance_labels(data[comp])
+        assert not data_comp.isnull().values.any(), "Sanity check for input data."
         eval_data.append(data_comp.iloc[-T_finance_data:, :-nr_labels].values)
         eval_labels.append(data_comp.iloc[-T_finance_data:, -nr_labels:].values)
     eval_data = np.stack(eval_data)
@@ -212,6 +217,7 @@ def train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_
             logdir (path): Directory for the experiment logs.
             modelpath (path): Path for the model checkpoints.
             val_epochs (bool): If "True" clustering results are saved every 10 epochs on default output files.
+            T_finance_data (int): length of financial time series
         """
 
     max_n_step = T_finance_data
@@ -226,6 +232,15 @@ def train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_
 
     saver = tf.train.Saver(max_to_keep=5)
     summaries = tf.summary.merge_all()
+
+    # print trainable variables
+    train_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+    print_trainable_vars(train_vars)
+
+    # [16.3.2021] debug VAE pretraining
+    vae_vars = [x for x in train_vars if ("encoder" in x.name) or ("decoder" in x.name)]
+    gradients_vae = get_gradients(vae_vars, model.loss_reconstruction_ze)
+
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
         test_losses = []
@@ -272,6 +287,11 @@ def train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_
                     t_begin=timeit.default_timer()
                 for i in range(num_batches):
                     batch_data, ii = next(train_gen)
+
+                    # [16.3.2021] debug VAE pretraining
+                    # print("\nData stats {}: {}, {}".format(i, np.reshape(batch_data, (-1, 7)).mean(axis=1),
+                    #                                      np.reshape(batch_data, (-1, 7)).std(axis=1)))
+
                     f_dic = {x: batch_data, lr_val: learning_rate, prior_val: prior}
                     f_dic.update(dp)
                     train_step_ae.run(feed_dict=f_dic)
@@ -285,9 +305,15 @@ def train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_
                         f_dic.update(dp)
                         train_loss, summary = sess.run([model.loss_reconstruction_ze, summaries], feed_dict=f_dic)
                         train_writer.add_summary(summary, tf.train.global_step(sess, model.global_step))
-                    # [16.3.2021] loss is nan only after 3 or 4 training rounds. TODO: investigate why
-                    # train_loss = sess.run(model.loss_reconstruction_ze, feed_dict=f_dic)
-                    # print(i, train_loss)
+
+                    # [16.3.2021] debug VAE pretraining: loss is nan only after 3 or 4 training rounds. TODO: investigate why
+                    train_loss, a, b, summary, gradients_vae_ = sess.run([model.loss_reconstruction_ze, model.z_e_sample,
+                                                 model.reconstruction_e_sample, summaries, gradients_vae], feed_dict=f_dic)
+                    train_writer.add_summary(summary, tf.train.global_step(sess, model.global_step))
+                    gradients_vae_stats = [(np.min(x), np.max(x), find_nearest(x, 0.)) for x in gradients_vae_]
+                    min_grad = np.min([np.abs(x) for _, _, x in gradients_vae_stats])
+                    print("\n", i, train_loss, min_grad)
+
                     pbar.set_postfix(epoch=epoch, train_loss=train_loss, test_loss=test_loss, refresh=False)
                     pbar.update(1)
                 if benchmark:
@@ -661,7 +687,8 @@ def z_dist_flat(z_e, embeddings, som_dim, latent_dim):
 
 @ex.automain
 def main(input_size, latent_dim, som_dim, learning_rate, decay_factor, alpha, beta, gamma, theta, ex_name, kappa, prior,
-         more_runs, dropout, eta, epochs_pretrain, batch_size, num_epochs, train_ratio, annealtime, modelpath, lstm_dim, T_finance_data):
+         more_runs, dropout, eta, epochs_pretrain, batch_size, num_epochs, train_ratio, annealtime, modelpath, lstm_dim,
+         T_finance_data, vae_nn_dim_1, vae_nn_dim_2):
 
     input_channels = input_size
 
@@ -670,7 +697,8 @@ def main(input_size, latent_dim, som_dim, learning_rate, decay_factor, alpha, be
 
     model = TDPSOM(input_size=input_size, latent_dim=latent_dim, som_dim=som_dim, learning_rate=lr_val,
                    decay_factor=decay_factor, dropout=dropout, input_channels=input_channels, alpha=alpha, beta=beta,
-                   eta=eta, kappa=kappa, theta=theta, gamma=gamma, prior=prior, lstm_dim=lstm_dim)
+                   eta=eta, kappa=kappa, theta=theta, gamma=gamma, prior=prior, lstm_dim=lstm_dim,
+                   vae_nn_dim_1=vae_nn_dim_1, vae_nn_dim_2=vae_nn_dim_2)
 
     # data_train, data_val, _, endpoints_total_val = get_data()
     data_train, data_val, _, endpoints_total_val = get_data_finance()

@@ -5,6 +5,12 @@ Utility functions for the DPSOM model
 import numpy as np
 from sklearn import metrics
 
+try:
+    import tensorflow.compat.v1 as tf
+    tf.disable_v2_behavior()
+except:
+    import tensorflow as tf
+
 
 def cluster_purity(y_pred,y_true):
     """
@@ -50,3 +56,26 @@ def compute_finance_labels(df, shift=1):
     nr_labels = len(df.columns) - n
 
     return df, nr_labels
+
+
+def print_trainable_vars(vars):
+    total_parameters = 0
+    print("\n\nTrainable variables:")
+    for v in vars:
+        print(v)
+        shape = v.get_shape()
+        var_params = 1
+        for dim in shape:
+            var_params *= dim.value
+        total_parameters += var_params
+    print("Number of train params: {}".format(total_parameters))
+
+
+def get_gradients(vars_, loss_):
+    return tf.gradients(loss_, vars_)
+
+
+def find_nearest(array, value):
+    array = np.reshape(array, (-1,))
+    idx = (np.abs(array - value)).argmin()
+    return array[idx]
