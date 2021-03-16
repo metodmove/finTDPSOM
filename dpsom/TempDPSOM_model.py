@@ -120,12 +120,12 @@ class TDPSOM:
 
     @lazy_scope
     def inputs(self):
-        x = tf.placeholder(tf.float32, shape=[None, None, 98], name="x")
+        x = tf.placeholder(tf.float32, shape=[None, None, self.input_size], name="x")
         return x
 
     @lazy_scope
     def x(self):
-        x = tf.reshape(self.inputs, [-1, 98])
+        x = tf.reshape(self.inputs, [-1, self.input_size])
         return x
 
     @lazy_scope

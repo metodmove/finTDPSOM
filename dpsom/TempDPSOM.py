@@ -20,12 +20,16 @@ from sacred.stflow import LogFileWriter
 import math
 import h5py
 from sklearn import metrics
-from dpsom.TempDPSOM_model import TDPSOM
+from TempDPSOM_model import TDPSOM
+from utils import compute_finance_labels
 from sklearn.model_selection import train_test_split
 import sklearn
 
+import random
+import pickle
+
 ex = sacred.Experiment("hyperopt")
-ex.observers.append(sacred.observers.FileStorageObserver("../sacred_runs_eICU"))
+ex.observers.append(sacred.observers.FileStorageObserver("../sacred_runs_finance"))
 ex.captured_out_filter = sacred.utils.apply_backspaces_and_linefeeds
 
 
@@ -90,6 +94,11 @@ def ex_config():
     benchmark=False # Benchmark train time per epoch and return
     train_ratio=1.0 # If changed, use a subset of the training data
 
+    # finance TDPSOM params below
+    finance_data_path = "../data/yf_basic_price_features.p"
+    N_companies_train = 400
+    T_finance_data = 144
+
 
 @ex.capture
 def get_data(validation):
@@ -120,8 +129,31 @@ def get_data(validation):
 
 
 @ex.capture
-def get_finance_data(validation):
-    raise NotImplementedError
+def get_data_finance(finance_data_path, N_companies_train, T_finance_data):
+
+    data = pickle.load(open(finance_data_path, 'rb'))
+
+    random.seed(42)
+    train_companies = random.sample(list(data.keys()), N_companies_train)
+    eval_companies = [x for x in list(data.keys()) if x not in train_companies]
+
+    train_data, train_labels = [], []
+    for comp in train_companies:
+        data_comp, nr_labels = compute_finance_labels(data[comp])
+        train_data.append(data_comp.iloc[-T_finance_data:, :-nr_labels].values)
+        train_labels.append(data_comp.iloc[-T_finance_data:, -nr_labels:].values)
+    train_data = np.stack(train_data)
+    train_labels = np.stack(train_labels)
+
+    eval_data, eval_labels = [], []
+    for comp in eval_companies:
+        data_comp, nr_labels = compute_finance_labels(data[comp])
+        eval_data.append(data_comp.iloc[-T_finance_data:, :-nr_labels].values)
+        eval_labels.append(data_comp.iloc[-T_finance_data:, -nr_labels:].values)
+    eval_data = np.stack(eval_data)
+    eval_labels = np.stack(eval_labels)
+
+    return train_data, eval_data, train_labels, eval_labels
 
 
 def get_normalized_data(data, patientid, mins, scales):
@@ -161,7 +193,7 @@ def batch_generator(data_train, data_val, endpoints_total_val, batch_size, mode=
 @ex.capture
 def train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_val, num_epochs, batch_size, latent_dim,
                 som_dim, learning_rate, epochs_pretrain, ex_name, logdir, modelpath, val_epochs, save_pretrain,
-                use_saved_pretrain, benchmark, train_ratio, annealtime, lstm_dim):
+                use_saved_pretrain, benchmark, train_ratio, annealtime, lstm_dim, T_finance_data):
 
     """Trains the T-DPSOM model.
         Params:
@@ -182,7 +214,7 @@ def train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_
             val_epochs (bool): If "True" clustering results are saved every 10 epochs on default output files.
         """
 
-    max_n_step = 72
+    max_n_step = T_finance_data
     epochs = 0
     iterations = 0
     pretrainpath = "../models/pretrain/LSTM"
@@ -253,6 +285,9 @@ def train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_
                         f_dic.update(dp)
                         train_loss, summary = sess.run([model.loss_reconstruction_ze, summaries], feed_dict=f_dic)
                         train_writer.add_summary(summary, tf.train.global_step(sess, model.global_step))
+                    # [16.3.2021] loss is nan only after 3 or 4 training rounds. TODO: investigate why
+                    # train_loss = sess.run(model.loss_reconstruction_ze, feed_dict=f_dic)
+                    # print(i, train_loss)
                     pbar.set_postfix(epoch=epoch, train_loss=train_loss, test_loss=test_loss, refresh=False)
                     pbar.update(1)
                 if benchmark:
@@ -484,7 +519,7 @@ def train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_
 
 @ex.capture
 def evaluate_model(model, x, val_gen, len_data_val, modelpath, epochs, batch_size, som_dim, learning_rate, alpha, gamma,
-                   beta , theta, epochs_pretrain, ex_name, kappa, dropout, prior, latent_dim, eta, lstm_dim):
+                   beta , theta, epochs_pretrain, ex_name, kappa, dropout, prior, latent_dim, eta, lstm_dim, T_finance_data):
     """Evaluates the performance of the trained model in terms of normalized
         mutual information adjusted mutual information score and purity.
 
@@ -514,7 +549,7 @@ def evaluate_model(model, x, val_gen, len_data_val, modelpath, epochs, batch_siz
             dict: Dictionary of evaluation results (NMI, AMI, Purity).
         """
 
-    max_n_step = 72  # length of the time-series
+    max_n_step = T_finance_data  # length of the time-series
 
     saver = tf.train.Saver(keep_checkpoint_every_n_hours=2.)
     num_batches = len_data_val // batch_size
@@ -626,7 +661,7 @@ def z_dist_flat(z_e, embeddings, som_dim, latent_dim):
 
 @ex.automain
 def main(input_size, latent_dim, som_dim, learning_rate, decay_factor, alpha, beta, gamma, theta, ex_name, kappa, prior,
-         more_runs, dropout, eta, epochs_pretrain, batch_size, num_epochs, train_ratio, annealtime, modelpath, lstm_dim):
+         more_runs, dropout, eta, epochs_pretrain, batch_size, num_epochs, train_ratio, annealtime, modelpath, lstm_dim, T_finance_data):
 
     input_channels = input_size
 
@@ -637,7 +672,8 @@ def main(input_size, latent_dim, som_dim, learning_rate, decay_factor, alpha, be
                    decay_factor=decay_factor, dropout=dropout, input_channels=input_channels, alpha=alpha, beta=beta,
                    eta=eta, kappa=kappa, theta=theta, gamma=gamma, prior=prior, lstm_dim=lstm_dim)
 
-    data_train, data_val, _, endpoints_total_val = get_data()
+    # data_train, data_val, _, endpoints_total_val = get_data()
+    data_train, data_val, _, endpoints_total_val = get_data_finance()
 
     if train_ratio<1.0:
         data_train=data_train[:int(len(data_train)*train_ratio)]
@@ -652,7 +688,7 @@ def main(input_size, latent_dim, som_dim, learning_rate, decay_factor, alpha, be
         num_batches = len(data_val) // batch_size
         num_pred = 6
         som = som_dim[0] * som_dim[1]
-        max_n_step = 72 # length of the time-series
+        max_n_step = T_finance_data # length of the time-series
         with tf.Session() as sess:
             sess.run(tf.global_variables_initializer())
             saver = tf.train.import_meta_graph(modelpath + ".meta")
