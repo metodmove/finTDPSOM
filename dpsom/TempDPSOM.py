@@ -20,13 +20,14 @@ from sacred.stflow import LogFileWriter
 import math
 import h5py
 from sklearn import metrics
-from TempDPSOM_model import TDPSOM
+from dpsom.TempDPSOM_model import TDPSOM
 from sklearn.model_selection import train_test_split
 import sklearn
 
 ex = sacred.Experiment("hyperopt")
-ex.observers.append(sacred.observers.FileStorageObserver.create("../sacred_runs_eICU"))
+ex.observers.append(sacred.observers.FileStorageObserver("../sacred_runs_eICU"))
 ex.captured_out_filter = sacred.utils.apply_backspaces_and_linefeeds
+
 
 @ex.config
 def ex_config():
@@ -57,11 +58,11 @@ def ex_config():
             more_runs (bool): Indicator whether to run the job once (False) or multiple times (True) outputting mean and
                               variance.
         """
-    input_size = 98
+    input_size = 7  # 98
     num_epochs = 100
-    batch_size = 300
-    latent_dim = 50
-    som_dim = [16,16]
+    batch_size = 40  # 300
+    latent_dim = 3  # 50
+    som_dim = [3, 3]  # [16,16]
     learning_rate = 0.001
     alpha = 10.
     beta = 10.
@@ -80,7 +81,7 @@ def ex_config():
     dropout = 0.5
     prior = 0.00001
     annealtime = 200
-    lstm_dim = 200
+    lstm_dim = 20  # 200
     val_epochs = False
     more_runs = False
     save_pretrain = False
@@ -88,6 +89,7 @@ def ex_config():
     
     benchmark=False # Benchmark train time per epoch and return
     train_ratio=1.0 # If changed, use a subset of the training data
+
 
 @ex.capture
 def get_data(validation):
@@ -115,6 +117,11 @@ def get_data(validation):
         data_val = data_total[int(len(data_total) * 0.85):]
         endpoints_total_val = endpoints_total[int(len(data_total) * 0.85):]
     return data_train, data_val, y_train, endpoints_total_val
+
+
+@ex.capture
+def get_finance_data(validation):
+    raise NotImplementedError
 
 
 def get_normalized_data(data, patientid, mins, scales):
@@ -208,7 +215,7 @@ def train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_
         pbar = tqdm(total=(num_epochs+epochs_pretrain*3) * (num_batches))
 
         print("\n**********Starting job {}********* \n".format(ex_name))
-        a = np.zeros((batch_size*72, som_dim[0] * som_dim[1]))
+        a = np.zeros((batch_size*max_n_step, som_dim[0] * som_dim[1]))
         dp = {p: a}
         dp.update(training_dic)
 
@@ -308,29 +315,29 @@ def train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_
                     t_end=timeit.default_timer()
                     ttime_som_per_epoch.append(t_end-t_begin)
 
-            for epoch in range(epochs_pretrain//3):
-                if benchmark:
-                    t_begin=timeit.default_timer()
-                for i in range(num_batches):
-                    batch_data, ii = next(train_gen)
-                    f_dic = {x: batch_data, lr_val: 0.01}
-                    f_dic.update(dp)
-                    train_step_som.run(feed_dict=f_dic)
-                    if i % 100 == 0:
-                        batch_val, _, ii = next(val_gen)
-                        f_dic = {x: batch_val}
-                        f_dic.update(dp)
-                        test_loss, summary = sess.run([model.loss_a, summaries], feed_dict=f_dic)
-                        test_writer.add_summary(summary, tf.train.global_step(sess, model.global_step))
-                        f_dic = {x: batch_data}
-                        f_dic.update(dp)
-                        train_loss, summary = sess.run([model.loss_a, summaries], feed_dict=f_dic)
-                        train_writer.add_summary(summary, tf.train.global_step(sess, model.global_step))
-                    pbar.set_postfix(epoch=epoch, train_loss=train_loss, test_loss=test_loss, refresh=False)
-                    pbar.update(1)
-                if benchmark:
-                    t_end=timeit.default_timer()
-                    ttime_som_per_epoch.append(t_end-t_begin)
+            # for epoch in range(epochs_pretrain//3):
+            #     if benchmark:
+            #         t_begin=timeit.default_timer()
+            #     for i in range(num_batches):
+            #         batch_data, ii = next(train_gen)
+            #         f_dic = {x: batch_data, lr_val: 0.01}
+            #         f_dic.update(dp)
+            #         train_step_som.run(feed_dict=f_dic)
+            #         if i % 100 == 0:
+            #             batch_val, _, ii = next(val_gen)
+            #             f_dic = {x: batch_val}
+            #             f_dic.update(dp)
+            #             test_loss, summary = sess.run([model.loss_a, summaries], feed_dict=f_dic)
+            #             test_writer.add_summary(summary, tf.train.global_step(sess, model.global_step))
+            #             f_dic = {x: batch_data}
+            #             f_dic.update(dp)
+            #             train_loss, summary = sess.run([model.loss_a, summaries], feed_dict=f_dic)
+            #             train_writer.add_summary(summary, tf.train.global_step(sess, model.global_step))
+            #         pbar.set_postfix(epoch=epoch, train_loss=train_loss, test_loss=test_loss, refresh=False)
+            #         pbar.update(1)
+            #     if benchmark:
+            #         t_end=timeit.default_timer()
+            #         ttime_som_per_epoch.append(t_end-t_begin)
 
             if benchmark:
                 t_end_all=timeit.default_timer()
@@ -374,7 +381,7 @@ def train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_
             for i in range(num_batches):
                 iterations += 1
                 batch_data, ii = next(train_gen)
-                ftrain = {p: ppt[ii*batch_size*72: (ii + 1)*batch_size*72]}
+                ftrain = {p: ppt[ii*batch_size*max_n_step: (ii + 1)*batch_size*max_n_step]}
                 f_dic = {x: batch_data, lr_val: learning_rate, prior_val: prior}
                 f_dic.update(ftrain)
                 f_dic.update(training_dic)
@@ -382,7 +389,7 @@ def train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_
                 train_step_prob.run(feed_dict=f_dic)
 
                 batch_val, _, ii = next(val_gen)
-                fval = {p: ppv[ii * batch_size*72: (ii + 1)*batch_size*72]}
+                fval = {p: ppv[ii * batch_size*max_n_step: (ii + 1)*batch_size*max_n_step]}
                 f_dic = {x: batch_val}
                 f_dic.update(fval)
                 f_dic.update(training_dic)
@@ -507,7 +514,7 @@ def evaluate_model(model, x, val_gen, len_data_val, modelpath, epochs, batch_siz
             dict: Dictionary of evaluation results (NMI, AMI, Purity).
         """
 
-    max_n_step = 72 #length of the time-series
+    max_n_step = 72  # length of the time-series
 
     saver = tf.train.Saver(keep_checkpoint_every_n_hours=2.)
     num_batches = len_data_val // batch_size
@@ -605,6 +612,7 @@ def evaluate_model(model, x, val_gen, len_data_val, modelpath, epochs, batch_siz
 
     return results
 
+
 @ex.capture
 def z_dist_flat(z_e, embeddings, som_dim, latent_dim):
     """Computes the distances between the encodings and the embeddings."""
@@ -620,7 +628,7 @@ def z_dist_flat(z_e, embeddings, som_dim, latent_dim):
 def main(input_size, latent_dim, som_dim, learning_rate, decay_factor, alpha, beta, gamma, theta, ex_name, kappa, prior,
          more_runs, dropout, eta, epochs_pretrain, batch_size, num_epochs, train_ratio, annealtime, modelpath, lstm_dim):
 
-    input_channels = 98
+    input_channels = input_size
 
     lr_val = tf.placeholder_with_default(learning_rate, [])
     prior_val = tf.placeholder_with_default(prior, [])
@@ -641,10 +649,10 @@ def main(input_size, latent_dim, som_dim, learning_rate, decay_factor, alpha, be
 
         tf.reset_default_graph()
         val_gen = batch_generator(data_train, data_val, endpoints_total_val, mode="val")
-        num_batches = len(data_val) // 300
+        num_batches = len(data_val) // batch_size
         num_pred = 6
-        som = 16 * 16
-        max_n_step = 72
+        som = som_dim[0] * som_dim[1]
+        max_n_step = 72 # length of the time-series
         with tf.Session() as sess:
             sess.run(tf.global_variables_initializer())
             saver = tf.train.import_meta_graph(modelpath + ".meta")
@@ -689,7 +697,7 @@ def main(input_size, latent_dim, som_dim, learning_rate, decay_factor, alpha, be
             z_e_all = z_e_all.reshape((-1, max_n_step, latent_dim))
             k_all = k_all.reshape((-1, max_n_step))
 
-            t = 72 - num_pred
+            t = max_n_step - num_pred
 
             embeddings = sess.run(embeddings, feed_dict={x: data_val[:, :t, :]})
             embeddings = np.reshape(embeddings, (-1, latent_dim))
@@ -717,14 +725,16 @@ def main(input_size, latent_dim, som_dim, learning_rate, decay_factor, alpha, be
             k_next = np.argmin(z_dist_flat(next_z_e_o, embeddings), axis=-1)
             k_o = np.concatenate([k_o, np.expand_dims(k_next, 1)], axis=1)
             z_e_o = np.concatenate([z_e_o, np.expand_dims(next_z_e_o, 1)], axis=1)
-            f_dic = {x: np.zeros((len(data_val), 1, 98)), is_training: False,
+            f_dic = {x: np.zeros((len(data_val), 1, input_size)), is_training: False,
                      z_e_p: np.zeros((1 * len(data_val), latent_dim)),
                      z_p: next_z_e_o, init_1: np.zeros((2, batch_size, lstm_dim))}
-            x_pred_hat = np.reshape(sess.run(reconstruction, feed_dict=f_dic), (-1, 1, 98))
+            x_pred_hat = np.reshape(sess.run(reconstruction, feed_dict=f_dic), (-1, 1, input_size))
 
+
+            n_val = 90
             for i in range(num_pred - 1):
                 print(i)
-                inp = data_val[:1500, (t + i), :]
+                inp = data_val[:n_val, (t + i), :]
                 f_dic = {x: np.reshape(inp, (inp.shape[0], 1, inp.shape[1]))}
                 val_dic = {is_training: False, z_e_p: next_z_e_o, init_1: state1_o,
                            z_p: np.zeros((max_n_step * len(inp), latent_dim))}
@@ -736,22 +746,22 @@ def main(input_size, latent_dim, som_dim, learning_rate, decay_factor, alpha, be
                 k_o = np.concatenate([k_o, np.expand_dims(k_next, 1)], axis=1)
                 z_e_o = np.concatenate([z_e_o, next_z_e_o], axis=1)
                 next_z_e_o = np.reshape(next_z_e_o, (-1, latent_dim))
-                f_dic = {x: np.zeros((len(data_val), 1, 98)), is_training: False,
+                f_dic = {x: np.zeros((len(data_val), 1, input_size)), is_training: False,
                          z_e_p: np.zeros((max_n_step * len(data_val), latent_dim)),
                          z_p: next_z_e_o, init_1: np.zeros((2, batch_size, lstm_dim))}
                 final_x = sess.run(reconstruction, feed_dict=f_dic)
-                x_pred_hat = np.concatenate([x_pred_hat, np.reshape(final_x, (-1, 1, 98))], axis=1)
+                x_pred_hat = np.concatenate([x_pred_hat, np.reshape(final_x, (-1, 1, input_size))], axis=1)
 
-            f_dic = {x: np.zeros((1500, 1, 98)), is_training: False, z_e_p: np.zeros((max_n_step * 1500, latent_dim)),
+            f_dic = {x: np.zeros((n_val, 1, input_size)), is_training: False, z_e_p: np.zeros((max_n_step * n_val, latent_dim)),
                      z_p: z_e_all[:, t - 1, :], init_1: np.zeros((2, batch_size, lstm_dim))}
             final_x = sess.run(reconstruction, feed_dict=f_dic)
 
         pred_ze = sklearn.metrics.mean_squared_error(np.reshape(next_z_e_o_all[:, :], (-1, latent_dim)),
                                                      np.reshape(z_e_all[:, -num_pred:], (-1, latent_dim)))
-        pred_rec = sklearn.metrics.mean_squared_error(np.reshape(x_rec, (-1, 98)),
-                                                      np.reshape(data_val[:1500, :], (-1, 98)))
-        pred_xhat = sklearn.metrics.mean_squared_error(np.reshape(x_pred_hat, (-1, 98)),
-                                                       np.reshape(data_val[:1500, -num_pred:], (-1, 98)))
+        pred_rec = sklearn.metrics.mean_squared_error(np.reshape(x_rec, (-1, input_size)),
+                                                      np.reshape(data_val[:n_val, :], (-1, input_size)))
+        pred_xhat = sklearn.metrics.mean_squared_error(np.reshape(x_pred_hat, (-1, input_size)),
+                                                       np.reshape(data_val[:n_val, -num_pred:], (-1, input_size)))
 
         f = open("results_eICU_pred.txt", "a+")
         f.write("Epochs= %d, som_dim=[%d,%d], latent_dim= %d, batch_size= %d, learning_rate= %f, "
