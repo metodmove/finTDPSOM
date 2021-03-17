@@ -1,5 +1,11 @@
 """
 Script for training the TempDPSOM model
+
+Tensorboard instructions:
+
+- from command line run: tensorboard --logdir="logs/{EXPERIMENT_NAME}/train" --port 8011
+- go to: http://localhost:8011/
+
 """
 
 import uuid
@@ -63,18 +69,18 @@ def ex_config():
                               variance.
         """
     input_size = 7  # 98
-    num_epochs = 100
+    num_epochs = 50
     batch_size = 40  # 300
-    latent_dim = 3  # 50
+    latent_dim = 5  # 50
     som_dim = [3, 3]  # [16,16]
-    learning_rate = 0.001
+    learning_rate = 0.0001  # 0.001
     alpha = 10.
-    beta = 10.
+    beta = 0.1  # 10.
     gamma = 50.
-    kappa = 1.
+    kappa = 10.  # 1.
     theta = 1.
     eta = 1.
-    epochs_pretrain = 50
+    epochs_pretrain = 0  # 50
     decay_factor = 0.99
     name = ex.get_experiment_info()["name"]
     ex_name = "{}_LSTM_{}_{}-{}_{}_{}".format(name, latent_dim, som_dim[0], som_dim[1], str(date.today()),
@@ -140,6 +146,9 @@ def get_data_finance(finance_data_path, N_companies_train, T_finance_data):
     train_companies = random.sample(list(data.keys()), N_companies_train)
     eval_companies = [x for x in list(data.keys()) if x not in train_companies]
 
+    # [16.3.] excluding BIIB for now in order to avoid nan loss
+    train_companies.remove("BIIB")
+
     train_data, train_labels = [], []
     for comp in train_companies:
         data_comp, nr_labels = compute_finance_labels(data[comp])
@@ -164,6 +173,19 @@ def get_data_finance(finance_data_path, N_companies_train, T_finance_data):
 def get_normalized_data(data, patientid, mins, scales):
     return ((data[data['patientunitstayid'] == patientid] - mins) /
             scales).drop(["patientunitstayid", "ts"], axis=1).fillna(0).values
+
+
+@ex.capture
+def get_data_synthetic(N_companies_train, T_finance_data, input_size):
+
+    # generate synthetic data
+    data = np.random.normal(loc=0, scale=2, size=(N_companies_train + 100, T_finance_data, input_size))
+    labels = np.random.normal(size=(N_companies_train + 100, T_finance_data, 2))
+
+    # normalize
+    data = (data - data.min(axis=0)) / (data.max(axis=0) - data.min(axis=0))
+
+    return data[:-100], data[-100:], labels[:-100], labels[-100:]
 
 
 @ex.capture
@@ -238,8 +260,8 @@ def train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_
     print_trainable_vars(train_vars)
 
     # [16.3.2021] debug VAE pretraining
-    vae_vars = [x for x in train_vars if ("encoder" in x.name) or ("decoder" in x.name)]
-    gradients_vae = get_gradients(vae_vars, model.loss_reconstruction_ze)
+    # vae_vars = [x for x in train_vars if ("encoder" in x.name) or ("decoder" in x.name)]
+    # gradients_vae = get_gradients(vae_vars, model.loss_reconstruction_ze)
 
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
@@ -276,7 +298,8 @@ def train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_
             print("\n\nUsing Saved Pretraining...\n")
             saver.restore(sess, pretrainpath)
         else:
-            print("\n\nAutoencoder Pretraining...\n")
+            step_ = sess.run(model.global_step)
+            print("\n\nAutoencoder Pretraining (step: {})...\n".format(step_))
             if benchmark:
                 t_begin_all=timeit.default_timer()
             prior = 0
@@ -291,6 +314,7 @@ def train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_
                     # [16.3.2021] debug VAE pretraining
                     # print("\nData stats {}: {}, {}".format(i, np.reshape(batch_data, (-1, 7)).mean(axis=1),
                     #                                      np.reshape(batch_data, (-1, 7)).std(axis=1)))
+                    # if (i == 164): continue
 
                     f_dic = {x: batch_data, lr_val: learning_rate, prior_val: prior}
                     f_dic.update(dp)
@@ -306,13 +330,13 @@ def train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_
                         train_loss, summary = sess.run([model.loss_reconstruction_ze, summaries], feed_dict=f_dic)
                         train_writer.add_summary(summary, tf.train.global_step(sess, model.global_step))
 
-                    # [16.3.2021] debug VAE pretraining: loss is nan only after 3 or 4 training rounds. TODO: investigate why
-                    train_loss, a, b, summary, gradients_vae_ = sess.run([model.loss_reconstruction_ze, model.z_e_sample,
-                                                 model.reconstruction_e_sample, summaries, gradients_vae], feed_dict=f_dic)
-                    train_writer.add_summary(summary, tf.train.global_step(sess, model.global_step))
-                    gradients_vae_stats = [(np.min(x), np.max(x), find_nearest(x, 0.)) for x in gradients_vae_]
-                    min_grad = np.min([np.abs(x) for _, _, x in gradients_vae_stats])
-                    print("\n", i, train_loss, min_grad)
+                    # [16.3.2021] debug VAE pretraining
+                    # train_loss, a, b, summary, gradients_vae_ = sess.run([model.loss_reconstruction_ze, model.z_e_sample,
+                    #                              model.reconstruction_e_sample, summaries, gradients_vae], feed_dict=f_dic)
+                    # train_writer.add_summary(summary, tf.train.global_step(sess, model.global_step))
+                    # gradients_vae_stats = [(np.min(x), np.max(x), find_nearest(x, 0.)) for x in gradients_vae_]
+                    # min_grad = np.min([np.abs(x) for _, _, x in gradients_vae_stats])
+                    # print("\n", i, train_loss, min_grad)
 
                     pbar.set_postfix(epoch=epoch, train_loss=train_loss, test_loss=test_loss, refresh=False)
                     pbar.update(1)
@@ -324,7 +348,8 @@ def train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_
                 t_end_all=timeit.default_timer()
                 ttime_ae_pretrain=t_end_all-t_begin_all
 
-            print("\n\nSOM initialization...\n")
+            step_= sess.run(model.global_step)
+            print("\n\nSOM initialization (step: {})...\n".format(step_))
             if benchmark:
                 t_begin_all=timeit.default_timer()
 
@@ -407,7 +432,8 @@ def train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_
             if save_pretrain:
                 saver.save(sess, pretrainpath)
 
-        print("\n\nTraining...\n")
+        step_ = sess.run(model.global_step)
+        print("\n\nTraining... (step: {})\n".format(step_))
 
         if benchmark:
             t_begin_all=timeit.default_timer()
@@ -419,7 +445,7 @@ def train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_
             if benchmark:
                 t_begin=timeit.default_timer()
             epochs += 1
-            print(epochs)
+            # print("\n", epochs)
             f_dic = {x: data_train}
             f_dic.update(training_dic)
             q = []
@@ -702,6 +728,7 @@ def main(input_size, latent_dim, som_dim, learning_rate, decay_factor, alpha, be
 
     # data_train, data_val, _, endpoints_total_val = get_data()
     data_train, data_val, _, endpoints_total_val = get_data_finance()
+    # data_train, data_val, _, endpoints_total_val = get_data_synthetic()
 
     if train_ratio<1.0:
         data_train=data_train[:int(len(data_train)*train_ratio)]

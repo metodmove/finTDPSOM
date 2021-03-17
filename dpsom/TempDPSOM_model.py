@@ -217,6 +217,10 @@ class TDPSOM:
         """Picks the index of the closest centroid for every embedding."""
         k = tf.argmin(self.z_dist_flat, axis=-1, name="k")
         tf.summary.histogram("clusters", k)
+
+        # display exact number of datapoints per cluster
+        k_names, _, k_counts = tf.unique_with_counts(k)
+        tf.summary.text('clusters_counts', tf.as_string(tf.stack([tf.cast(k_names, dtype=tf.int32), k_counts])))
         return k
 
     @lazy_scope
@@ -468,6 +472,8 @@ class TDPSOM:
         lr_decay = tf.train.exponential_decay(self.learning_rate, self.global_step, self.decay_steps, self.decay_factor,
                                               staircase=True)
         optimizer = tf.train.AdamOptimizer(lr_decay)
+        # optimizer = tf.train.AdamOptimizer(self.learning_rate)
+        # optimizer = tf.train.GradientDescentOptimizer(self.learning_rate)
         train_step = optimizer.minimize(self.loss, global_step=self.global_step)
         train_step_prob = optimizer.minimize(self.loss_prediction, global_step=self.global_step)
         train_step_ae = optimizer.minimize(self.loss_reconstruction_ze, global_step=self.global_step)
