@@ -388,7 +388,10 @@ class TDPSOM:
         k_right = k_1 * self.som_dim[0] + k2_right
         k_left = k_1 * self.som_dim[0] + k2_left
 
-        q_t = tf.transpose(self.q_ng)
+        # [18.3.2021] debug log_som not converging
+        # q_t = tf.transpose(self.q_ng)
+        q_t = tf.transpose(self.q)
+
         q_up = tf.transpose(tf.gather_nd(q_t, tf.reshape(k_up, [self.som_dim[0] * self.som_dim[1], 1])))
         q_down = tf.transpose(tf.gather_nd(q_t, tf.reshape(k_down, [self.som_dim[0] * self.som_dim[1], 1])))
         q_right = tf.transpose(tf.gather_nd(q_t, tf.reshape(k_right, [self.som_dim[0] * self.som_dim[1], 1])))
@@ -400,8 +403,13 @@ class TDPSOM:
 
         #mask = tf.greater(self.q, 0.05 * tf.ones_like(self.q))
         #new_q = tf.multiply(self.q, tf.cast(mask, tf.float32))
-        new_q = self.q
-        q_n = tf.math.multiply(q_neighbours, tf.stop_gradient(new_q))
+
+        # [18.3.2021] debug log_som not converging
+        # new_q = self.q
+        # q_n = tf.math.multiply(q_neighbours, tf.stop_gradient(new_q))
+        # q_n = tf.math.multiply(q_neighbours, self.q_ng)
+        q_n = tf.math.multiply(q_neighbours, self.q)
+
         q_n = tf.reduce_sum(q_n, axis=-1)
         qq = tf.math.negative(tf.reduce_mean(q_n))
         return qq

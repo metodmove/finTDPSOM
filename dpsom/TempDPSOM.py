@@ -29,6 +29,7 @@ from sklearn import metrics
 from TempDPSOM_model import TDPSOM
 from utils import compute_finance_labels, print_trainable_vars, get_gradients, find_nearest
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import RobustScaler, StandardScaler, MinMaxScaler
 import sklearn
 
 import random
@@ -72,15 +73,15 @@ def ex_config():
     num_epochs = 50
     batch_size = 40  # 300
     latent_dim = 5  # 50
-    som_dim = [3, 3]  # [16,16]
+    som_dim = [2, 2]  # [16,16]
     learning_rate = 0.0001  # 0.001
     alpha = 10.
     beta = 0.1  # 10.
-    gamma = 50.
+    gamma = 2.5
     kappa = 10.  # 1.
     theta = 1.
     eta = 1.
-    epochs_pretrain = 0  # 50
+    epochs_pretrain = 10  # 50
     decay_factor = 0.99
     name = ex.get_experiment_info()["name"]
     ex_name = "{}_LSTM_{}_{}-{}_{}_{}".format(name, latent_dim, som_dim[0], som_dim[1], str(date.today()),
@@ -107,6 +108,9 @@ def ex_config():
     finance_data_path = "../data/yf_basic_price_features.p"
     N_companies_train = 400
     T_finance_data = 144
+
+    # TODO: implement rolling window scaling of time-series
+    scale_fin_data = StandardScaler()  # [StandardScaler(), RobustScaler(), MinMaxScaler()]
 
 
 @ex.capture
@@ -138,7 +142,7 @@ def get_data(validation):
 
 
 @ex.capture
-def get_data_finance(finance_data_path, N_companies_train, T_finance_data):
+def get_data_finance(finance_data_path, N_companies_train, T_finance_data, scale_fin_data):
 
     data = pickle.load(open(finance_data_path, 'rb'))
 
@@ -151,9 +155,17 @@ def get_data_finance(finance_data_path, N_companies_train, T_finance_data):
 
     train_data, train_labels = [], []
     for comp in train_companies:
+
         data_comp, nr_labels = compute_finance_labels(data[comp])
+
         assert not data_comp.isnull().values.any(), "Sanity check for input data."
-        train_data.append(data_comp.iloc[-T_finance_data:, :-nr_labels].values)
+
+        if scale_fin_data:
+            train_data_comp = scale_fin_data.fit_transform(data_comp.iloc[-T_finance_data:, :-nr_labels].values)
+        else:
+            train_data_comp = data_comp.iloc[-T_finance_data:, :-nr_labels].values
+
+        train_data.append(train_data_comp)
         train_labels.append(data_comp.iloc[-T_finance_data:, -nr_labels:].values)
     train_data = np.stack(train_data)
     train_labels = np.stack(train_labels)
@@ -162,7 +174,13 @@ def get_data_finance(finance_data_path, N_companies_train, T_finance_data):
     for comp in eval_companies:
         data_comp, nr_labels = compute_finance_labels(data[comp])
         assert not data_comp.isnull().values.any(), "Sanity check for input data."
-        eval_data.append(data_comp.iloc[-T_finance_data:, :-nr_labels].values)
+
+        if scale_fin_data:
+            eval_data_comp = scale_fin_data.fit_transform(data_comp.iloc[-T_finance_data:, :-nr_labels].values)
+        else:
+            eval_data_comp = data_comp.iloc[-T_finance_data:, :-nr_labels].values
+
+        eval_data.append(eval_data_comp)
         eval_labels.append(data_comp.iloc[-T_finance_data:, -nr_labels:].values)
     eval_data = np.stack(eval_data)
     eval_labels = np.stack(eval_labels)
@@ -259,10 +277,6 @@ def train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_
     train_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
     print_trainable_vars(train_vars)
 
-    # [16.3.2021] debug VAE pretraining
-    # vae_vars = [x for x in train_vars if ("encoder" in x.name) or ("decoder" in x.name)]
-    # gradients_vae = get_gradients(vae_vars, model.loss_reconstruction_ze)
-
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
         test_losses = []
@@ -311,15 +325,10 @@ def train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_
                 for i in range(num_batches):
                     batch_data, ii = next(train_gen)
 
-                    # [16.3.2021] debug VAE pretraining
-                    # print("\nData stats {}: {}, {}".format(i, np.reshape(batch_data, (-1, 7)).mean(axis=1),
-                    #                                      np.reshape(batch_data, (-1, 7)).std(axis=1)))
-                    # if (i == 164): continue
-
                     f_dic = {x: batch_data, lr_val: learning_rate, prior_val: prior}
                     f_dic.update(dp)
                     train_step_ae.run(feed_dict=f_dic)
-                    if i % 100 == 0:
+                    if i % 3 == 0:
                         batch_val, _, ii = next(val_gen)
                         f_dic = {x: batch_val}
                         f_dic.update(dp)
@@ -329,14 +338,6 @@ def train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_
                         f_dic.update(dp)
                         train_loss, summary = sess.run([model.loss_reconstruction_ze, summaries], feed_dict=f_dic)
                         train_writer.add_summary(summary, tf.train.global_step(sess, model.global_step))
-
-                    # [16.3.2021] debug VAE pretraining
-                    # train_loss, a, b, summary, gradients_vae_ = sess.run([model.loss_reconstruction_ze, model.z_e_sample,
-                    #                              model.reconstruction_e_sample, summaries, gradients_vae], feed_dict=f_dic)
-                    # train_writer.add_summary(summary, tf.train.global_step(sess, model.global_step))
-                    # gradients_vae_stats = [(np.min(x), np.max(x), find_nearest(x, 0.)) for x in gradients_vae_]
-                    # min_grad = np.min([np.abs(x) for _, _, x in gradients_vae_stats])
-                    # print("\n", i, train_loss, min_grad)
 
                     pbar.set_postfix(epoch=epoch, train_loss=train_loss, test_loss=test_loss, refresh=False)
                     pbar.update(1)
@@ -361,7 +362,7 @@ def train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_
                     f_dic = {x: batch_data, lr_val: 0.1}
                     f_dic.update(dp)
                     train_step_som.run(feed_dict=f_dic)
-                    if i % 100 == 0:
+                    if i % 3 == 0:
                         batch_val, _, ii = next(val_gen)
                         f_dic = {x: batch_val}
                         f_dic.update(dp)
@@ -385,7 +386,7 @@ def train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_
                     f_dic = {x: batch_data, lr_val: 0.01}
                     f_dic.update(dp)
                     train_step_som.run(feed_dict=f_dic)
-                    if i % 100 == 0:
+                    if i % 3 == 0:
                         batch_val, _, ii = next(val_gen)
                         f_dic = {x: batch_val}
                         f_dic.update(dp)
@@ -401,29 +402,29 @@ def train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_
                     t_end=timeit.default_timer()
                     ttime_som_per_epoch.append(t_end-t_begin)
 
-            # for epoch in range(epochs_pretrain//3):
-            #     if benchmark:
-            #         t_begin=timeit.default_timer()
-            #     for i in range(num_batches):
-            #         batch_data, ii = next(train_gen)
-            #         f_dic = {x: batch_data, lr_val: 0.01}
-            #         f_dic.update(dp)
-            #         train_step_som.run(feed_dict=f_dic)
-            #         if i % 100 == 0:
-            #             batch_val, _, ii = next(val_gen)
-            #             f_dic = {x: batch_val}
-            #             f_dic.update(dp)
-            #             test_loss, summary = sess.run([model.loss_a, summaries], feed_dict=f_dic)
-            #             test_writer.add_summary(summary, tf.train.global_step(sess, model.global_step))
-            #             f_dic = {x: batch_data}
-            #             f_dic.update(dp)
-            #             train_loss, summary = sess.run([model.loss_a, summaries], feed_dict=f_dic)
-            #             train_writer.add_summary(summary, tf.train.global_step(sess, model.global_step))
-            #         pbar.set_postfix(epoch=epoch, train_loss=train_loss, test_loss=test_loss, refresh=False)
-            #         pbar.update(1)
-            #     if benchmark:
-            #         t_end=timeit.default_timer()
-            #         ttime_som_per_epoch.append(t_end-t_begin)
+            for epoch in range(epochs_pretrain//3):
+                if benchmark:
+                    t_begin=timeit.default_timer()
+                for i in range(num_batches):
+                    batch_data, ii = next(train_gen)
+                    f_dic = {x: batch_data, lr_val: 0.01}
+                    f_dic.update(dp)
+                    train_step_som.run(feed_dict=f_dic)
+                    if i % 3 == 0:
+                        batch_val, _, ii = next(val_gen)
+                        f_dic = {x: batch_val}
+                        f_dic.update(dp)
+                        test_loss, summary = sess.run([model.loss_a, summaries], feed_dict=f_dic)
+                        test_writer.add_summary(summary, tf.train.global_step(sess, model.global_step))
+                        f_dic = {x: batch_data}
+                        f_dic.update(dp)
+                        train_loss, summary = sess.run([model.loss_a, summaries], feed_dict=f_dic)
+                        train_writer.add_summary(summary, tf.train.global_step(sess, model.global_step))
+                    pbar.set_postfix(epoch=epoch, train_loss=train_loss, test_loss=test_loss, refresh=False)
+                    pbar.update(1)
+                if benchmark:
+                    t_end=timeit.default_timer()
+                    ttime_som_per_epoch.append(t_end-t_begin)
 
             if benchmark:
                 t_end_all=timeit.default_timer()
@@ -517,7 +518,8 @@ def train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_
             t_end_all=timeit.default_timer()
             ttime_training=t_end_all-t_begin_all
 
-        print("\n\nPrediction Finetuning...\n")
+        step_ = sess.run(model.global_step)
+        print("\n\nPrediction Finetuning... (step: {})\n".format(step_))
         if benchmark:
             t_begin_all=timeit.default_timer()
 
