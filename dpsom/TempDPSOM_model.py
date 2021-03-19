@@ -200,6 +200,7 @@ class TDPSOM:
                                        tf.expand_dims(self.embeddings, 0))
         z_dist_red = tf.reduce_sum(z_dist, axis=-1)  # 1,32,8,8
         z_dist_flat = tf.reshape(z_dist_red, [-1, self.som_dim[0] * self.som_dim[0]])  # 1,32,64
+        z_dist_flat = tf.identity(z_dist_flat, name="z_dist_flat")
         return z_dist_flat
 
     @lazy_scope
@@ -389,8 +390,8 @@ class TDPSOM:
         k_left = k_1 * self.som_dim[0] + k2_left
 
         # [18.3.2021] debug log_som not converging
-        # q_t = tf.transpose(self.q_ng)
-        q_t = tf.transpose(self.q)
+        q_t = tf.transpose(self.q_ng)
+        # q_t = tf.transpose(self.q)
 
         q_up = tf.transpose(tf.gather_nd(q_t, tf.reshape(k_up, [self.som_dim[0] * self.som_dim[1], 1])))
         q_down = tf.transpose(tf.gather_nd(q_t, tf.reshape(k_down, [self.som_dim[0] * self.som_dim[1], 1])))
@@ -405,10 +406,10 @@ class TDPSOM:
         #new_q = tf.multiply(self.q, tf.cast(mask, tf.float32))
 
         # [18.3.2021] debug log_som not converging
-        # new_q = self.q
-        # q_n = tf.math.multiply(q_neighbours, tf.stop_gradient(new_q))
+        new_q = self.q
+        q_n = tf.math.multiply(q_neighbours, tf.stop_gradient(new_q))
         # q_n = tf.math.multiply(q_neighbours, self.q_ng)
-        q_n = tf.math.multiply(q_neighbours, self.q)
+        # q_n = tf.math.multiply(q_neighbours, self.q)
 
         q_n = tf.reduce_sum(q_n, axis=-1)
         qq = tf.math.negative(tf.reduce_mean(q_n))
@@ -428,7 +429,13 @@ class TDPSOM:
 
     @lazy_scope
     def loss_smoothness(self):
-        """Compute the smoothness loss"""
+        """
+        Compute the smoothness loss
+
+        TODO: they compute the t-student similarity between latent embedding (z vector, output of the encoder)
+         at time t+1 and som embeddings (cluster centroids) at time t. In paper, they say they use latent embeddings
+         for both time steps?
+        """
         k_reshaped = tf.reshape(self.k, [self.batch_size, self.step_size])
         k_old = tf.concat([k_reshaped[:, 0:1], k_reshaped[:, :-1]], axis=1)
         k_old = tf.reshape(tf.cast(k_old, tf.int64), [-1, 1])

@@ -82,6 +82,7 @@ def ex_config():
     theta = 1.
     eta = 1.
     epochs_pretrain = 10  # 50
+    epochs_finetuning_pred = 20
     decay_factor = 0.99
     name = ex.get_experiment_info()["name"]
     ex_name = "{}_LSTM_{}_{}-{}_{}_{}".format(name, latent_dim, som_dim[0], som_dim[1], str(date.today()),
@@ -224,10 +225,24 @@ def batch_generator(data_train, data_val, endpoints_total_val, batch_size, mode=
     while True:
         if mode == "train":
             for i in range(len(data_train) // batch_size):
+
+                # if (i + 1) != (len(data_train) // batch_size):
+                #     time_series = data_train[i * batch_size: (i + 1) * batch_size]
+                # else:
+                #     time_series = data_train[i * batch_size:]
+
                 time_series = data_train[i * batch_size: (i + 1) * batch_size]
                 yield time_series, i
         elif mode == "val":
             for i in range(len(data_val) // batch_size):
+
+                # if (i + 1) != (len(data_val) // batch_size):
+                #     time_series = data_val[i * batch_size: (i + 1) * batch_size]
+                #     time_series_endpoint = endpoints_total_val[i * batch_size: (i + 1) * batch_size]
+                # else:
+                #     time_series = data_val[i * batch_size:]
+                #     time_series_endpoint = endpoints_total_val[i * batch_size:]
+
                 time_series = data_val[i * batch_size: (i + 1) * batch_size]
                 time_series_endpoint = endpoints_total_val[i * batch_size: (i + 1) * batch_size]
                 yield time_series, time_series_endpoint, i
@@ -238,7 +253,7 @@ def batch_generator(data_train, data_val, endpoints_total_val, batch_size, mode=
 @ex.capture
 def train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_val, num_epochs, batch_size, latent_dim,
                 som_dim, learning_rate, epochs_pretrain, ex_name, logdir, modelpath, val_epochs, save_pretrain,
-                use_saved_pretrain, benchmark, train_ratio, annealtime, lstm_dim, T_finance_data):
+                use_saved_pretrain, benchmark, train_ratio, annealtime, lstm_dim, T_finance_data, epochs_finetuning_pred):
 
     """Trains the T-DPSOM model.
         Params:
@@ -483,7 +498,7 @@ def train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_
                 f_dic.update(training_dic)
                 test_loss, summary = sess.run([model.loss, summaries], feed_dict=f_dic)
                 test_losses.append(test_loss)
-                if i % 100 == 0:
+                if i % 3 == 0:
                     test_writer.add_summary(summary, tf.train.global_step(sess, model.global_step))
                     f_dic = {x: batch_data}
                     f_dic.update(ftrain)
@@ -523,7 +538,7 @@ def train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_
         if benchmark:
             t_begin_all=timeit.default_timer()
 
-        for epoch in range(50):
+        for epoch in range(epochs_finetuning_pred):
             if benchmark:
                 t_begin=timeit.default_timer()
             for i in range(num_batches):
@@ -531,7 +546,7 @@ def train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_
                 f_dic = {x: batch_data, lr_val: learning_rate, prior_val: prior}
                 f_dic.update(dp)
                 train_step_prob.run(feed_dict=f_dic)
-                if i % 100 == 0:
+                if i % 3 == 0:
                     batch_val, _, ii = next(val_gen)
                     f_dic = {x: batch_val}
                     f_dic.update(dp)
@@ -553,7 +568,7 @@ def train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_
             ttime_pred=t_end_all-t_begin_all
 
         saver.save(sess, modelpath)
-        results = evaluate_model(model, x, val_gen, len_data_val, modelpath, epochs)
+        # results = evaluate_model(model, x, val_gen, len_data_val, modelpath, epochs)
         pbar.close()
 
         if benchmark:
@@ -568,7 +583,7 @@ def train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_
             print("Pred finetuning time per epoch: {:.3f}".format(np.mean(ttime_pred_per_epoch)))
             sys.exit(0)
 
-        return results
+        # return results
 
 
 @ex.capture
@@ -638,8 +653,8 @@ def evaluate_model(model, x, val_gen, len_data_val, modelpath, epochs, batch_siz
         labels_val_all = np.array(labels_val_all)
         test_k_all = np.array(test_k_all)
         labels_val_all = np.reshape(labels_val_all, (-1, labels_val_all.shape[-1]))
-        print("Mean: {:.3f}, Std: {:.3f}".format(np.mean(labels_val_all[:,3]), np.std(labels_val_all[:,3])))
-        NMI_24 = metrics.normalized_mutual_info_score(labels_val_all[:, 3], test_k_all, average_method='geometric')
+        # print("Mean: {:.3f}, Std: {:.3f}".format(np.mean(labels_val_all[:,3]), np.std(labels_val_all[:,3])))
+        # NMI_24 = metrics.normalized_mutual_info_score(labels_val_all[:, 3], test_k_all, average_method='geometric')
         NMI_12 = metrics.normalized_mutual_info_score(labels_val_all[:, 2], test_k_all, average_method='geometric')
         NMI_6 = metrics.normalized_mutual_info_score(labels_val_all[:, 1], test_k_all, average_method='geometric')
         NMI_1 = metrics.normalized_mutual_info_score(labels_val_all[:, 0], test_k_all, average_method='geometric')
@@ -682,7 +697,7 @@ def evaluate_model(model, x, val_gen, len_data_val, modelpath, epochs, batch_siz
         I = M * sd / (N_n * W_n)
 
     results = {}
-    results["NMI_24"] = NMI_24
+    # results["NMI_24"] = NMI_24
     results["NMI_12"] = NMI_12
     results["NMI_6"] = NMI_6
     results["NMI_1"] = NMI_1
@@ -694,8 +709,8 @@ def evaluate_model(model, x, val_gen, len_data_val, modelpath, epochs, batch_siz
             "theta= %f, eta= %f, beta= %f, alpha=%f, gamma=%f, epochs_pretrain=%d, dropout= %f, prior= %f"
                 % (epochs, som_dim[0], som_dim[1], latent_dim, batch_size, learning_rate, theta, eta, beta,
                    alpha, gamma, epochs_pretrain, dropout, prior))
-    f.write(", kappa= %f, NMI24: %f, NMI12: %f, NMI6: %f, NMI1: %f, AMI1: %f, I: %f.Name: %r \n"
-            % (kappa, results["NMI_24"], results["NMI_12"], results["NMI_6"], results["NMI_1"], results["AMI_1"],
+    f.write(", kappa= %f, NMI12: %f, NMI6: %f, NMI1: %f, AMI1: %f, I: %f.Name: %r \n"
+            % (kappa, results["NMI_12"], results["NMI_6"], results["NMI_1"], results["AMI_1"],
                results["MI"], ex_name))
     f.close()
 
@@ -736,13 +751,16 @@ def main(input_size, latent_dim, som_dim, learning_rate, decay_factor, alpha, be
         data_train=data_train[:int(len(data_train)*train_ratio)]
 
     if not more_runs:
-        results = train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_val)
+        # results = train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_val)
+        train_model(model, data_train, data_val, endpoints_total_val, lr_val, prior_val)
 
 #################################################################################################################################################
 
         tf.reset_default_graph()
         val_gen = batch_generator(data_train, data_val, endpoints_total_val, mode="val")
+        train_gen = batch_generator(data_train, data_val, endpoints_total_val, mode="train")
         num_batches = len(data_val) // batch_size
+        num_batches_train = len(data_train) // batch_size
         num_pred = 6
         som = som_dim[0] * som_dim[1]
         max_n_step = T_finance_data # length of the time-series
@@ -764,106 +782,171 @@ def main(input_size, latent_dim, som_dim, learning_rate, decay_factor, alpha, be
             embeddings = graph.get_tensor_by_name("embeddings/embeddings:0")
             z_p = graph.get_tensor_by_name('reconstruction_e/decoder/z_e:0')
             reconstruction = graph.get_tensor_by_name("reconstruction_e/x_hat:0")
+            z_dist_flat = graph.get_tensor_by_name("k/z_dist_flat/z_dist_flat:0")
 
             print("Evaluation...")
             training_dic = {is_training: True, z_e_p: np.zeros((max_n_step * len(data_val), latent_dim)),
                             init_1: np.zeros((2, batch_size, lstm_dim)),
                             z_p: np.zeros((max_n_step * len(data_val), latent_dim))}
+            save_dict = {}
+
+            # ============== save eval clusters/recons/preds ===========================
             k_all = []
             z_e_all = []
             z_q_all = []
             qq = []
             x_rec = []
+            z_dist_flat_all = []
+            x_hat_all = []
             for i in range(num_batches):
                 batch_data, batch_labels, ii = next(val_gen)
                 f_dic = {x: batch_data}
                 k_all.extend(sess.run(k, feed_dict=f_dic))
                 z_q_all.extend(sess.run(q, feed_dict=f_dic))
                 z_e_all.extend(sess.run(z_e, feed_dict=f_dic))
+                z_dist_flat_all.extend(sess.run(z_dist_flat, feed_dict=f_dic))
                 qq.extend(sess.run(q, feed_dict=f_dic))
                 f_dic.update(training_dic)
+                assert f_dic[is_training] is True
                 x_rec.extend(sess.run(reconstruction, feed_dict=f_dic))
+
+                # predictions
+                next_z_e_ = sess.run(next_z_e, feed_dict=f_dic)
+                f_dic.update({is_training: False, z_p: np.reshape(next_z_e_, (-1, latent_dim))})
+                x_hat_all.extend(sess.run(reconstruction, feed_dict=f_dic))
+
             z_e_all = np.array(z_e_all)
             k_all = np.array(k_all)
             qq = np.array(qq)
             x_rec = np.array(x_rec)
             z_e_all = z_e_all.reshape((-1, max_n_step, latent_dim))
-            k_all = k_all.reshape((-1, max_n_step))
+            z_dist_flat_all = np.array(z_dist_flat_all)
+            x_hat_all = np.array(x_hat_all)
+            # k_all = k_all.reshape((-1, max_n_step))
 
-            t = max_n_step - num_pred
+            save_dict["x_rec_eval"] = x_rec
+            save_dict["k_eval"] = k_all
+            save_dict["k_dist_eval"] = z_dist_flat_all
+            save_dict["x_preds_eval"] = x_hat_all
+            # =============================================================================
 
-            embeddings = sess.run(embeddings, feed_dict={x: data_val[:, :t, :]})
-            embeddings = np.reshape(embeddings, (-1, latent_dim))
-
-            z_e_o = z_e_all[:, :t, :]
-            k_o = k_all[:, :t]
-            k_eval = []
-            next_z_e_o = []
-            state1_o = []
-            for i in range(num_batches):
-                batch_data, batch_labels, ii = next(val_gen)
-                batch_data = batch_data[:, :t, :]
+            # ============== save train clusters/recons/preds ===========================
+            k_all_train = []
+            z_e_all_train = []
+            z_q_all_train = []
+            qq_train = []
+            x_rec_train = []
+            z_dist_flat_all_train = []
+            x_hat_all_train = []
+            for i in range(num_batches_train):
+                batch_data, ii = next(train_gen)
                 f_dic = {x: batch_data}
+                k_all_train.extend(sess.run(k, feed_dict=f_dic))
+                z_q_all_train.extend(sess.run(q, feed_dict=f_dic))
+                z_e_all_train.extend(sess.run(z_e, feed_dict=f_dic))
+                z_dist_flat_all_train.extend(sess.run(z_dist_flat, feed_dict=f_dic))
+                qq_train.extend(sess.run(q, feed_dict=f_dic))
                 f_dic.update(training_dic)
-                next_z_e_o.extend(sess.run(next_z_e, feed_dict=f_dic))
-                if i == 0:
-                    state1_o = sess.run(state1, feed_dict=f_dic)
-                else:
-                    state1_o = np.concatenate([state1_o, sess.run(state1, feed_dict=f_dic)], axis=1)
-            next_z_e_o = np.array(next_z_e_o)
-            state1_o = np.array(state1_o)
+                assert f_dic[is_training] is True
+                x_rec_train.extend(sess.run(reconstruction, feed_dict=f_dic))
 
-            next_z_e_o_all = np.reshape(next_z_e_o[:, -1, :], (-1, 1, latent_dim))
-            next_z_e_o = next_z_e_o[:, -1, :]
-            k_next = np.argmin(z_dist_flat(next_z_e_o, embeddings), axis=-1)
-            k_o = np.concatenate([k_o, np.expand_dims(k_next, 1)], axis=1)
-            z_e_o = np.concatenate([z_e_o, np.expand_dims(next_z_e_o, 1)], axis=1)
-            f_dic = {x: np.zeros((len(data_val), 1, input_size)), is_training: False,
-                     z_e_p: np.zeros((1 * len(data_val), latent_dim)),
-                     z_p: next_z_e_o, init_1: np.zeros((2, batch_size, lstm_dim))}
-            x_pred_hat = np.reshape(sess.run(reconstruction, feed_dict=f_dic), (-1, 1, input_size))
+                # predictions
+                next_z_e_ = sess.run(next_z_e, feed_dict=f_dic)
+                f_dic.update({is_training: False, z_p: np.reshape(next_z_e_, (-1, latent_dim))})
+                x_hat_all_train.extend(sess.run(reconstruction, feed_dict=f_dic))
 
+            z_e_all_train = np.array(z_e_all_train)
+            k_all_train = np.array(k_all_train)
+            qq_train = np.array(qq_train)
+            x_rec_train = np.array(x_rec_train)
+            z_e_all_train = z_e_all_train.reshape((-1, max_n_step, latent_dim))
+            z_dist_flat_all_train = np.array(z_dist_flat_all_train)
+            # k_all_train = k_all_train.reshape((-1, max_n_step))
+            x_hat_all_train = np.array(x_hat_all_train)
 
-            n_val = 90
-            for i in range(num_pred - 1):
-                print(i)
-                inp = data_val[:n_val, (t + i), :]
-                f_dic = {x: np.reshape(inp, (inp.shape[0], 1, inp.shape[1]))}
-                val_dic = {is_training: False, z_e_p: next_z_e_o, init_1: state1_o,
-                           z_p: np.zeros((max_n_step * len(inp), latent_dim))}
-                f_dic.update(val_dic)
-                next_z_e_o = sess.run(next_z_e, feed_dict=f_dic)
-                state1_o = sess.run(state1, feed_dict=f_dic)
-                next_z_e_o_all = np.concatenate([next_z_e_o_all, next_z_e_o], axis=1)
-                k_next = np.argmin(z_dist_flat(next_z_e_o, embeddings), axis=-1)
-                k_o = np.concatenate([k_o, np.expand_dims(k_next, 1)], axis=1)
-                z_e_o = np.concatenate([z_e_o, next_z_e_o], axis=1)
-                next_z_e_o = np.reshape(next_z_e_o, (-1, latent_dim))
-                f_dic = {x: np.zeros((len(data_val), 1, input_size)), is_training: False,
-                         z_e_p: np.zeros((max_n_step * len(data_val), latent_dim)),
-                         z_p: next_z_e_o, init_1: np.zeros((2, batch_size, lstm_dim))}
-                final_x = sess.run(reconstruction, feed_dict=f_dic)
-                x_pred_hat = np.concatenate([x_pred_hat, np.reshape(final_x, (-1, 1, input_size))], axis=1)
+            save_dict["x_rec_train"] = x_rec_train
+            save_dict["k_train"] = k_all_train
+            save_dict["k_dist_train"] = z_dist_flat_all_train
+            save_dict["x_preds_train"] = x_hat_all_train
 
-            f_dic = {x: np.zeros((n_val, 1, input_size)), is_training: False, z_e_p: np.zeros((max_n_step * n_val, latent_dim)),
-                     z_p: z_e_all[:, t - 1, :], init_1: np.zeros((2, batch_size, lstm_dim))}
-            final_x = sess.run(reconstruction, feed_dict=f_dic)
+            # save recons/preds/clusters
+            with open('../logs/{}/output.p'.format(ex_name), 'wb') as file:
+                pickle.dump(save_dict, file)
+            # =============================================================================
 
-        pred_ze = sklearn.metrics.mean_squared_error(np.reshape(next_z_e_o_all[:, :], (-1, latent_dim)),
-                                                     np.reshape(z_e_all[:, -num_pred:], (-1, latent_dim)))
-        pred_rec = sklearn.metrics.mean_squared_error(np.reshape(x_rec, (-1, input_size)),
-                                                      np.reshape(data_val[:n_val, :], (-1, input_size)))
-        pred_xhat = sklearn.metrics.mean_squared_error(np.reshape(x_pred_hat, (-1, input_size)),
-                                                       np.reshape(data_val[:n_val, -num_pred:], (-1, input_size)))
-
-        f = open("results_eICU_pred.txt", "a+")
-        f.write("Epochs= %d, som_dim=[%d,%d], latent_dim= %d, batch_size= %d, learning_rate= %f, "
-                "theta= %f, eta= %f, beta= %f, alpha=%f, gamma=%f, epochs_pretrain=%d, dropout= %f, annealtime= %d, "
-                % (num_epochs, som_dim[0], som_dim[1], latent_dim, batch_size, learning_rate, theta, eta, beta,
-                   alpha, gamma, epochs_pretrain, dropout, annealtime))
-        f.write(", kappa= %f, pred_ze: %f, pred_rec: %f, pred_xhat: %f.Name: %r \n"
-                % (kappa, pred_ze, pred_rec, pred_xhat, ex_name))
-        f.close()
+        #     t = max_n_step - num_pred
+        #
+        #     embeddings = sess.run(embeddings, feed_dict={x: data_val[:, :t, :]})
+        #     embeddings = np.reshape(embeddings, (-1, latent_dim))
+        #
+        #     z_e_o = z_e_all[:, :t, :]
+        #     k_o = k_all[:, :t]
+        #     k_eval = []
+        #     next_z_e_o = []
+        #     state1_o = []
+        #     for i in range(num_batches):
+        #         batch_data, batch_labels, ii = next(val_gen)
+        #         batch_data = batch_data[:, :t, :]
+        #         f_dic = {x: batch_data}
+        #         f_dic.update(training_dic)
+        #         next_z_e_o.extend(sess.run(next_z_e, feed_dict=f_dic))
+        #         if i == 0:
+        #             state1_o = sess.run(state1, feed_dict=f_dic)
+        #         else:
+        #             state1_o = np.concatenate([state1_o, sess.run(state1, feed_dict=f_dic)], axis=1)
+        #     next_z_e_o = np.array(next_z_e_o)
+        #     state1_o = np.array(state1_o)
+        #
+        #     next_z_e_o_all = np.reshape(next_z_e_o[:, -1, :], (-1, 1, latent_dim))
+        #     next_z_e_o = next_z_e_o[:, -1, :]
+        #     k_next = np.argmin(z_dist_flat(next_z_e_o, embeddings), axis=-1)
+        #     k_o = np.concatenate([k_o, np.expand_dims(k_next, 1)], axis=1)
+        #     z_e_o = np.concatenate([z_e_o, np.expand_dims(next_z_e_o, 1)], axis=1)
+        #     f_dic = {x: np.zeros((len(data_val), 1, input_size)), is_training: False,
+        #              z_e_p: np.zeros((1 * len(data_val), latent_dim)),
+        #              z_p: next_z_e_o, init_1: np.zeros((2, batch_size, lstm_dim))}
+        #     x_pred_hat = np.reshape(sess.run(reconstruction, feed_dict=f_dic), (-1, 1, input_size))
+        #
+        #     n_val = len(data_val)
+        #     for i in range(num_pred - 1):
+        #         print(i)
+        #         inp = data_val[:n_val, (t + i), :]
+        #         f_dic = {x: np.reshape(inp, (inp.shape[0], 1, inp.shape[1]))}
+        #         val_dic = {is_training: False, z_e_p: next_z_e_o, init_1: state1_o,
+        #                    z_p: np.zeros((max_n_step * len(inp), latent_dim))}
+        #         f_dic.update(val_dic)
+        #         next_z_e_o = sess.run(next_z_e, feed_dict=f_dic)
+        #         state1_o = sess.run(state1, feed_dict=f_dic)
+        #         next_z_e_o_all = np.concatenate([next_z_e_o_all, next_z_e_o], axis=1)
+        #         k_next = np.argmin(z_dist_flat(next_z_e_o, embeddings), axis=-1)
+        #         k_o = np.concatenate([k_o, np.expand_dims(k_next, 1)], axis=1)
+        #         z_e_o = np.concatenate([z_e_o, next_z_e_o], axis=1)
+        #         next_z_e_o = np.reshape(next_z_e_o, (-1, latent_dim))
+        #         f_dic = {x: np.zeros((len(data_val), 1, input_size)), is_training: False,
+        #                  z_e_p: np.zeros((max_n_step * len(data_val), latent_dim)),
+        #                  z_p: next_z_e_o, init_1: np.zeros((2, batch_size, lstm_dim))}
+        #         final_x = sess.run(reconstruction, feed_dict=f_dic)
+        #         x_pred_hat = np.concatenate([x_pred_hat, np.reshape(final_x, (-1, 1, input_size))], axis=1)
+        #
+        #     f_dic = {x: np.zeros((n_val, 1, input_size)), is_training: False, z_e_p: np.zeros((max_n_step * n_val, latent_dim)),
+        #              z_p: z_e_all[:, t - 1, :], init_1: np.zeros((2, batch_size, lstm_dim))}
+        #     final_x = sess.run(reconstruction, feed_dict=f_dic)
+        #
+        # pred_ze = sklearn.metrics.mean_squared_error(np.reshape(next_z_e_o_all[:, :], (-1, latent_dim)),
+        #                                              np.reshape(z_e_all[:, -num_pred:], (-1, latent_dim)))
+        # pred_rec = sklearn.metrics.mean_squared_error(np.reshape(x_rec, (-1, input_size)),
+        #                                               np.reshape(data_val[:n_val, :], (-1, input_size)))
+        # pred_xhat = sklearn.metrics.mean_squared_error(np.reshape(x_pred_hat, (-1, input_size)),
+        #                                                np.reshape(data_val[:n_val, -num_pred:], (-1, input_size)))
+        #
+        # f = open("results_eICU_pred.txt", "a+")
+        # f.write("Epochs= %d, som_dim=[%d,%d], latent_dim= %d, batch_size= %d, learning_rate= %f, "
+        #         "theta= %f, eta= %f, beta= %f, alpha=%f, gamma=%f, epochs_pretrain=%d, dropout= %f, annealtime= %d, "
+        #         % (num_epochs, som_dim[0], som_dim[1], latent_dim, batch_size, learning_rate, theta, eta, beta,
+        #            alpha, gamma, epochs_pretrain, dropout, annealtime))
+        # f.write(", kappa= %f, pred_ze: %f, pred_rec: %f, pred_xhat: %f.Name: %r \n"
+        #         % (kappa, pred_ze, pred_rec, pred_xhat, ex_name))
+        # f.close()
 
 #################################################################################################################################################
 

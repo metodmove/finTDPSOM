@@ -49,6 +49,7 @@ def compute_finance_labels(df, shift=1):
 
     df["label t"] = df["return"].apply(lambda x: 1. if x > 0 else 0.)
     df["label t+1"] = df["return"].shift(-shift).apply(lambda x: 1. if x > 0 else 0.)
+    df["label volume"] = df["volume_daily_change"].apply(lambda x: 1. if x > 0 else 0.)
 
     # removing last shift rows as there labels can not be computed
     df = df.iloc[:-shift]
