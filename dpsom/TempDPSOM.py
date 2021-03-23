@@ -73,7 +73,7 @@ def ex_config():
     num_epochs = 50
     batch_size = 40  # 300
     latent_dim = 5  # 50
-    som_dim = [8, 8]  # [16,16]
+    som_dim = [2, 2]  # [16,16]
     learning_rate = 0.0001  # 0.001
     alpha = 10.
     beta = 0.1  # 10.
@@ -113,6 +113,8 @@ def ex_config():
     # TODO: implement rolling window scaling of time-series
     scale_fin_data = StandardScaler()  # [StandardScaler(), RobustScaler(), MinMaxScaler()]
     # scale_fin_data = MinMaxScaler()
+
+    hyperparam_sweep_results = "fin_data_results_{}.txt".format(som_dim[0])
 
 
 @ex.capture
@@ -732,7 +734,7 @@ def z_dist_flat(z_e, embeddings, som_dim, latent_dim):
 @ex.automain
 def main(input_size, latent_dim, som_dim, learning_rate, decay_factor, alpha, beta, gamma, theta, ex_name, kappa, prior,
          more_runs, dropout, eta, epochs_pretrain, batch_size, num_epochs, train_ratio, annealtime, modelpath, lstm_dim,
-         T_finance_data, vae_nn_dim_1, vae_nn_dim_2, scale_fin_data, epochs_finetuning_pred):
+         T_finance_data, vae_nn_dim_1, vae_nn_dim_2, scale_fin_data, epochs_finetuning_pred, hyperparam_sweep_results):
 
     input_channels = input_size
 
@@ -871,7 +873,7 @@ def main(input_size, latent_dim, som_dim, learning_rate, decay_factor, alpha, be
 
         results_dict = compute_metrics(data_train, data_val, save_dict, T=T_finance_data, som_grid=som_dim)
 
-        f = open("results_eICU.txt", "a+")
+        f = open(hyperparam_sweep_results, "a+")
         f.write("Epochs= %d, som_dim=[%d,%d], latent_dim= %d, batch_size= %d, learning_rate= %f, "
                 "theta= %f, eta= %f, beta= %f, alpha=%f, gamma=%f, epochs_pretrain=%d, dropout= %f, prior= %f, kapa= %f,"
                 "vae_dim_1=%f, vae_dim_2=%f, lstm_dim=%f, T=%f, epochs_finetuning_pred=%f, "
